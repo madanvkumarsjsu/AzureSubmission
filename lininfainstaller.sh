@@ -40,9 +40,9 @@ if [ $# -ne 27 ]
 then
 	lininfainstaller.sh domainHost domainName domainUser domainPassword nodeName nodePort dbType dbName dbUser dbPassword dbHost dbPort sitekeyKeyword joinDomain  osUserName HDIClusterName HDIClusterLoginUsername HDIClusterLoginPassword HDIClusterSSHHostname HDIClusterSSHUsername HDIClusterSSHPassword Clusterjobhistory Clusterjobhistorywebapp ClusterRMSaddress ClusterRMWaddress storageName storageKey
 fi
-
-apt-get update
-
+#echo "before update" >> /home/$osUserName/output.out
+apt-get update &>/dev/null
+#echo "after update" >> /home/$osUserName/output.out
 CLOUD_SUPPORT_ENABLE=1
 
 dbAddress=$dbHost:$dbPort
@@ -66,18 +66,20 @@ PATH="$JAVA_HOME/bin":"$PATH"
 export PATH
 
 chmod -R 777 $JAVA_HOME
-
+#echo "before if" >> /home/$osUserName/output.out
 createDomain=1
 if [ $joinDomain -eq 1 ]
 then
+	#echo "inside if" >> /home/$osUserName/output.out
     createDomain=0
 	# This is buffer time for master node to start
 	sleep 600
 else
+	#echo "inside else" >> /home/$osUserName/output.out
 	cd $utilityHome
-    java -jar iadutility.jar createAzureFileShare -storageaccesskey $storageKey -storagename $storageName
+    java -jar iadutility.jar createAzureFileShare -storageaccesskey $storageKey -storagename $storageName	
 fi
-
+#echo "after if" >> /home/$osUserName/output.out
 apt-get install cifs-utils
 mountDir=/mnt/infaaeshare
 mkdir $mountDir
@@ -131,22 +133,28 @@ sed -i s/^DOMAIN_PSSWD=.*/DOMAIN_PSSWD=$domainPassword/ $infainstallerloc/Silent
 sed -i s/^DOMAIN_CNFRM_PSSWD=.*/DOMAIN_CNFRM_PSSWD=$domainPassword/ $infainstallerloc/SilentInput.properties
 
 cd $infainstallerloc
+#echo "before silent install" >> /home/$osUserName/output.out
 echo Y Y | sh silentinstall.sh 
-
+#echo "after silent install" >> /home/$osUserName/output.out
 infainstallionlocown=/home/$osUserName/Informatica
 
-chown -R $osUserName $infainstallionlocown
-chown -R $osUserName /opt/Informatica 
-chown -R $osUserName /mnt/infaaeshare
 #INFA BINARIES TO CLUSTER : RPM Installation - Start
 echo $osUserName $HDIClusterName $HDIClusterLoginUsername $HDIClusterLoginPassword $HDIClusterSSHHostname $HDIClusterSSHUsername $HDIClusterSSHPassword 
 
+if [ $joinDomain -eq 0 ]
+then
+#echo "inside if BDM" >> /home/$osUserName/output.out
+#Change sh to bash in server machine
+sudo ln -f -s /bin/bash /bin/sh
 mkdir /home/$osUserName/infaRPMInstall
 cd /home/$osUserName/infaRPMInstall
-wget http://ispstorenp.blob.core.windows.net/bderpm/informatica_10.0.0-1.deb
-
+#echo "before untar" >> /home/$osUserName/output.out
+#wget http://ispstorenp.blob.core.windows.net/bderpm/informatica_10.0.0-1.deb
+tar -zxvf /opt/Informatica/Archive/Hadoop_Debian/InformaticaHadoop-10.0.0.Update1-Deb.tar.gz
+cd /home/$osUserName/infaRPMInstall/InformaticaHadoop-10.0.0-1Deb
+#echo "after untar" >> /home/$osUserName/output.out
 #Ambari API calls to extract Head node and Data nodes
-echo "Getting list of hosts from ambari"
+#echo "Getting list of hosts from ambari"
 hostsJson=$(curl -u $HDIClusterLoginUsername:$HDIClusterLoginPassword -X GET https://$HDIClusterName.azurehdinsight.net/api/v1/clusters/$HDIClusterName/hosts)
 echo $hostsJson 
 
@@ -174,6 +182,11 @@ wnArr=$(echo $workernodes | tr "\n" "\n")
 #tmpRemoteFolderName = rpmtemp
 #filename = informatica_10.0.0-1.deb
 sudo apt-get install sshpass
+
+#Change sh to bash in headnode
+sudo sshpass -p $HDIClusterSSHPassword ssh -o StrictHostKeyChecking=no $HDIClusterSSHUsername@$headnode0ip "sudo ln -f -s /bin/bash /bin/sh"
+
+#echo "before scp rpm installations" >> /home/$osUserName/output.out
 for workernode in $wnArr
 do
     echo "[$workernode]" 
@@ -189,11 +202,14 @@ do
 	sudo sshpass -p $HDIClusterSSHPassword ssh -o StrictHostKeyChecking=no $HDIClusterSSHUsername@$workernodeip "sudo dpkg -i ~/rpmtemp/informatica_10.0.0-1.deb"
 	#Clean the temp folder
 	sudo sshpass -p $HDIClusterSSHPassword ssh -o StrictHostKeyChecking=no $HDIClusterSSHUsername@$workernodeip "sudo rm -rf ~/rpmtemp"
+	#Change sh to bash in worker nodes
+	sudo sshpass -p $HDIClusterSSHPassword ssh -o StrictHostKeyChecking=no $HDIClusterSSHUsername@$workernodeip "sudo ln -f -s /bin/bash /bin/sh"
 done
 
 cd /home/$osUserName
 rm -rf /home/$osUserName/infaRPMInstall
 #INFA BINARIES TO CLUSTER : RPM Installation - End
+#echo "after scp rpm installations" >> /home/$osUserName/output.out
 #Updating yarn site - Start
 echo $Clusterjobhistory $Clusterjobhistorywebapp $ClusterRMSaddress $ClusterRMWaddress
 sed -i '/<configuration>/ a <property>\n<name>mapreduce.jobhistory.address</name>\n<value>'$Clusterjobhistory'</value>\n<description>MapReduce JobHistory Server IPC host:port</description>\n</property>' $hadoopYarnConfDirLocation/yarn-site.xml
@@ -201,11 +217,18 @@ sed -i '/<configuration>/ a <property>\n<name>mapreduce.jobhistory.webapp.addres
 sed -i '/<configuration>/ a <property>\n<name>yarn.resourcemanager.scheduler.address</name>\n<value>'$ClusterRMSaddress'</value>\n<description>CLASSPATH for YARN applications. A comma-separated list of CLASSPATH entries</description>\n</property>' $hadoopYarnConfDirLocation/yarn-site.xml
 sed -i '/<configuration>/ a <property>\n<name>yarn.resourcemanager.webapp.address</name>\n<value>'$ClusterRMWaddress'</value>\n<description>CLASSPATH for YARN applications. A comma-separated list of CLASSPATH entries</description>\n</property>' $hadoopYarnConfDirLocation/yarn-site.xml
 #Updating yarn site - End
-
+#echo "after yarn modifications" >> /home/$osUserName/output.out
 #Cluster Connection creation - Start
 cd $ispBinLocation
 #HadoopClusterConnection
-sh infacmd.sh createConnection -un $domainUser -pd $domainPassword -ct Hadoop -dn $domainName -cn HDIClusterConnection -o RMAddress=$headnode0ip:8050 cadiMaxPort=9200 cadiMinPort=9100 cadiUserName=$HDIClusterSSHUsername cadiWorkingDirectory=/tmp databaseName=default defaultFSURI=hdfs://$headnode0ip:8020 engineType=MRv2 hiveWarehouseDirectoryOnHDFS=/hive/warehouse jobMonitoringURL=$headnode0ip:8088 metastoreMode=remote remoteMetastoreURI=thrift://$headnode0ip:9083
+#echo "connectioncreation1" >> /home/$osUserName/conn1.out
+sh infacmd.sh createConnection -un $domainUser -pd $domainPassword -ct Hadoop -dn $domainName -cn HDIClusterConnection -o RMAddress=$headnode0ip:8050 cadiMaxPort=9200 cadiMinPort=9100 cadiUserName=$HDIClusterSSHUsername cadiWorkingDirectory=/tmp databaseName=default defaultFSURI=hdfs://mycluster/ engineType=MRv2 hiveWarehouseDirectoryOnHDFS=/hive/warehouse jobMonitoringURL=$headnode0ip:8088 metastoreMode=remote remoteMetastoreURI=thrift://$headnode0ip:9083
 #HDFS Connection
-sh infacmd.sh createConnection -un $domainUser -pd $domainPassword -ct HadoopFileSystem -dn $domainName -cn HDIHDFSConnection -o nameNodeURL=hdfs://$headnode0ip:8020 userName=$HDIClusterSSHUsername
+#echo "connectioncreation2" >> /home/$osUserName/conn2.out
+sh infacmd.sh createConnection -un $domainUser -pd $domainPassword -ct HadoopFileSystem -dn $domainName -cn HDIHDFSConnection -o nameNodeURL=hdfs://mycluster/ userName=$HDIClusterSSHUsername
 #Cluster Connection creation - End
+fi
+#echo "after if statement" >> /home/$osUserName/output.out
+chown -R $osUserName $infainstallionlocown
+chown -R $osUserName /opt/Informatica 
+chown -R $osUserName /mnt/infaaeshare
